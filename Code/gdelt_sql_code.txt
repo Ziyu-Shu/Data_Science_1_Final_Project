@@ -1,0 +1,24 @@
+SELECT
+  *
+FROM
+  `gdelt-bq.full.events`
+WHERE
+  -- event codes except root 01–05 (remove rhetorical/noisy events)
+  EventRootCode NOT IN ('01','02','03','04','05')
+
+  -- actor1 = China or USA
+  AND Actor1CountryCode IN ('CHN', 'USA')
+
+  -- actor2 = China or USA
+  AND Actor2CountryCode IN ('CHN', 'USA')
+
+  -- ensure cross-national dyad
+  AND Actor1CountryCode != Actor2CountryCode
+
+  -- restrict to the desired date range
+  AND SQLDATE BETWEEN 20090120 AND 20250801
+
+  -- require multiple independent sources
+  AND NumSources > 1
+ORDER BY
+  NumArticles DESC;

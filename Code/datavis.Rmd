@@ -1,0 +1,274 @@
+---
+title: "data_vis"
+output: html_document
+---
+
+## Setup and uploading data
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+
+library(ggplot2)
+library(scales)
+library(readxl)   # for Excel
+library(readr)    # for CSV
+library(stringr)
+library(dplyr)
+library(lubridate)
+library(scales)
+library(ggnewscale)
+
+# Excel file
+gdelt_events <- read.csv("../Data/GDELT/gdelt_events_filterednumsources_20092025.csv")
+
+# CSV file
+panel_data <- read_csv(
+  "../Data/panel_aligned_raw_for_model.csv"
+)
+
+cfr_events <- read_csv(
+  "../Data/cfr_events.csv"
+)
+```
+
+## Data cleaning for visualization
+
+```{r}
+gdelt_events$time <- as.Date(as.character(gdelt_events$SQLDATE), format = "%Y%m%d")
+
+gdelt_events <- gdelt_events %>%
+  mutate(
+    time = as.Date(as.character(SQLDATE), format = "%Y%m%d")
+  )
+
+gdelt_events <- gdelt_events %>%
+  mutate(
+    admin = case_when(
+      time >= as.Date("2009-01-20") & time < as.Date("2013-01-20") ~ "Obama I (2009–2013)",
+      time >= as.Date("2013-01-20") & time < as.Date("2017-01-20") ~ "Obama II (2013–2017)",
+      time >= as.Date("2017-01-20") & time < as.Date("2021-01-20") ~ "Trump (2017–2021)",
+      time >= as.Date("2021-01-20")                               ~ "Biden (2021–2025)",
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  filter(!is.na(admin)) %>%
+  mutate(
+    admin = factor(
+      admin,
+      levels = c(
+        "Obama I (2009–2013)",
+        "Obama II (2013–2017)",
+        "Trump (2017–2021)",
+        "Biden (2021–2025)"
+      )
+    )
+  )
+```
+
+## Create CFR events and event lines for visualization
+```{r}
+gdelt_events <- gdelt_events %>%
+  mutate(
+    ToneWeightedMentions = AvgTone * NumMentions
+  )
+
+# Subset to the events and convert dates
+events_for_lines <- cfr_events %>%
+  # convert "Month YYYY" -> Date (1st of month)
+  mutate(
+    Date_trim = trimws(date),
+    event_date = as.Date(paste0("1 ", Date_trim), format = "%d %B %Y")
+  ) %>%
+  # drop NAs
+  filter(!is.na(event_date)) %>%
+  # map each event to the same admin buckets used in your quad chart
+  mutate(
+    admin = case_when(
+      event_date >= as.Date("2009-01-20") & event_date < as.Date("2013-01-20") ~ "Obama I (2009–2013)",
+      event_date >= as.Date("2013-01-20") & event_date < as.Date("2017-01-20") ~ "Obama II (2013–2017)",
+      event_date >= as.Date("2017-01-20") & event_date < as.Date("2021-01-20") ~ "Trump (2017–2021)",
+      event_date >= as.Date("2021-01-20")                                   ~ "Biden (2021–2025)",
+      TRUE ~ NA_character_
+    ),
+    # make sure factor levels match your existing admin factor
+    admin = factor(
+      admin,
+      levels = c(
+        "Obama I (2009–2013)",
+        "Obama II (2013–2017)",
+        "Trump (2017–2021)",
+        "Biden (2021–2025)"
+      )
+    ),
+    # map effect to colors
+    effect_color = case_when(
+      effect == "negative" ~ "red",
+      effect == "positive" ~ "darkgreen",
+      TRUE                 ~ "grey50"   # neutral
+    )
+  )
+
+# Create a label column for only the named events
+events_for_labels <- events_for_lines %>%
+  filter(summary %in% c(
+    "U.S. ‘Pivots’ Toward Asia",
+    "U.S. Warns China Over South China Sea",
+    "Trump Tariffs Target China",
+    "Tensions Soar Amid COVID-19 Pandemic",
+    "U.S., China Close Consulates in Diplomatic Escalation",
+    "Tensions Flare Over Pelosi’s Visit to Taiwan",
+    "U.S. Shoots Down Suspected Chinese Spy Balloon",
+    "Biden and Xi Hold Talks Following APEC Summit"
+  )) %>%
+  mutate(
+    label = case_when(
+      summary == "U.S. ‘Pivots’ Toward Asia"                       ~ "U.S. Asia Pivot",
+      summary == "U.S. Warns China Over South China Sea"           ~ "South China Sea Warning",
+      summary == "Trump Tariffs Target China"                      ~ "Trump China Tariffs",
+      summary == "Tensions Soar Amid COVID-19 Pandemic"           ~ "COVID-19",
+      summary == "U.S., China Close Consulates in Diplomatic Escalation" ~ "Consulate Closure",
+      summary == "Tensions Flare Over Pelosi’s Visit to Taiwan"   ~ "Pelosi Taiwan Visit",
+      summary == "U.S. Shoots Down Suspected Chinese Spy Balloon" ~ "Spy Balloon",
+      summary == "Biden and Xi Hold Talks Following APEC Summit"  ~ "Biden-Xi APEC Meeting",
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  filter(!is.na(label))
+```
+
+## Generate and save figure 3, Event Tone and Mentions Over Time by Administration
+```{r}
+weekly_data <- gdelt_events %>%
+  mutate(week = floor_date(time, unit = "week", week_start = 1)) %>%
+  group_by(week) %>%
+  summarise(
+    sum_TWM = sum(ToneWeightedMentions, na.rm = TRUE)
+  ) %>%
+  ungroup()
+
+max_y <- max(weekly_data$sum_TWM, na.rm = TRUE)
+label_y <- max_y * 0.02
+
+fig3 <- ggplot(
+  gdelt_events,
+  aes(x = time, y = NumMentions, color = AvgTone, group = 1)
+) +
+  geom_line(linewidth = 0.5, alpha = 0.8) +
+  geom_point(size = 0.7, alpha = 0.8) +
+  scale_color_gradient2(
+    low = "red",
+    mid = "yellow",
+    high = "green",
+    midpoint = 0,
+    name = "Avg Tone"
+  ) +
+
+  # start a new color scale for events
+  ggnewscale::new_scale_color() +
+
+  geom_vline(
+    data = events_for_lines,
+    aes(xintercept = event_date, color = effect),
+    linewidth = 0.4,
+    linetype = "dashed",
+    inherit.aes = FALSE
+  ) +
+  geom_text(
+    data = events_for_labels,
+    aes(x = event_date, y = label_y, label = label, color = effect),
+    angle = 90,
+    vjust = -0.2,
+    size = 2,
+    inherit.aes = FALSE
+  ) +
+  scale_color_manual(
+    values = c(negative = "darkred", positive = "darkgreen"),
+    name = "Effect"
+  ) +
+  labs(
+    x = "Date",
+    y = "Number of Mentions",
+    title = "Event Mentions Over Time by Administration"
+  ) +
+  facet_wrap(~ admin, ncol = 2, scales = "free_x") +
+  theme_minimal(base_size = 12) +
+  theme(
+    legend.position = "right",
+    strip.text = element_text(face = "bold"),
+    plot.title = element_text(face = "bold")
+  )
+
+ggsave(
+  "fig3.png",
+  plot   = fig3,
+  width  = 8,   # inches
+  height = 5,
+  dpi    = 300  # or 400/600 if you want print quality
+)
+
+fig3
+```
+
+## Generate and save figure 4, weighted event-level tones by weekly mean
+```{r}
+max_y <- max(weekly_data$sum_TWM, na.rm = TRUE)
+label_y <- max_y * 0
+
+
+fig4 <- ggplot(weekly_data, aes(x = week, y = sum_TWM)) +
+  # existing weekly red line
+  geom_line(linewidth = 0.5, color = "black") +
+  
+  # ALL events get vertical lines
+  geom_vline(
+    data = events_for_lines,
+    aes(xintercept = event_date, color = effect),
+    linewidth = 0.4,
+    linetype = "dashed",
+    inherit.aes = FALSE
+  ) +
+
+  # ONLY labeled subset gets text labels
+    geom_text(
+    data = events_for_labels,
+    aes(x = event_date, y = label_y, label = label, color = effect),
+    angle = 90,
+    vjust = -0.2,
+    size = 2,
+    inherit.aes = FALSE
+  ) +
+
+  # color mapping for event effect
+  scale_color_manual(
+    values = c(
+      negative = "red",
+      positive = "darkgreen",
+      neutral  = "grey50"
+    ),
+    guide = "none"
+  ) +
+  
+  facet_wrap(~ admin, ncol = 2, scales = "free_x") +
+  scale_y_continuous(labels = label_number(big.mark = ",")) +
+  labs(
+    x = "Date",
+    y = "Tone-Weighted Mentions (weekly sum)",
+    title = "Weekly Tone-Weighted Mentions by Administration",
+    subtitle = "Vertical lines = all CFR events; labels = selected high-impact events"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    plot.title = element_text(face = "bold"),
+    strip.text = element_text(face = "bold")
+  )
+
+ggsave(
+  "fig4.png",
+  plot   = fig4,
+  width  = 8,   # inches
+  height = 5,
+  dpi    = 300  # or 400/600 if you want print quality
+)
+
+fig4
+```
